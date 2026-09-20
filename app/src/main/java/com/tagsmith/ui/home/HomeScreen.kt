@@ -178,7 +178,9 @@ fun HomeScreen(
             Row(
                 Modifier.fillMaxWidth().padding(bottom = 6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Bottom,
+                // Centred, not bottom-aligned: the action's tap padding is taller
+                // than the kicker, so Bottom would lift its label off the line.
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Kicker("Recent activity")
                 if (state.recent.isNotEmpty()) TextAction("All", onClick = onOpenHistory)

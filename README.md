@@ -10,6 +10,32 @@ one moment.
 This repository is **v1** of the build plan: scan, tag details, writing URL and
 text, history, settings, and the error states that actually bite.
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/scan.png" width="30%" alt="Scan — waiting for a tag, rings radiating from the phone mark">
+  <img src="docs/screenshots/tap-prompt.png" width="30%" alt="Tap prompt — the payload about to be written">
+  <img src="docs/screenshots/write.png" width="30%" alt="Write — URL payload with the byte counter">
+</p>
+<p align="center">
+  <em>The tap owns the dark ground whatever the theme is · the payload is shown before it is committed · the byte counter measures real NDEF encoding, not string length</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/home-light.png" width="30%" alt="Home in the light theme — stats and recent activity">
+  <img src="docs/screenshots/history.png" width="30%" alt="History — the ledger grouped by day, failures in red">
+  <img src="docs/screenshots/settings.png" width="30%" alt="Settings in the dark theme">
+</p>
+<p align="center">
+  <em>Home · the ledger, grouped by day with failures called out · settings, dark treated as a first-class theme rather than an inversion</em>
+</p>
+
+A note on how these were taken, since it affects what you are looking at: NFC
+cannot be emulated, so the ledger screens show **seeded sample data** and the two
+tap screens were captured with the radio forced to report ready. Every pixel is
+the real app rendering real state — but no physical tag was involved, and none of
+the NFC paths have been exercised against one yet. See **Known limits**.
+
 ## Running it
 
 ```bash
@@ -128,6 +154,12 @@ falls back to `MifareUltralight.getType()` and then to `Ndef.maxSize`.
 
 ## Known limits
 
+- **No NFC operation has been run against a physical tag.** Read, write, verify,
+  lock, erase and every failure path are written and compile, but the emulator has
+  no radio, so none of it is proven. The UI is finished; the core is unverified.
+  This is the first thing to fix.
+- **Settings → Data is one-third built.** The design draws `Export JSON`, `Import`
+  and `Clear history`; only Clear history works. History has its own CSV export.
 - **Byte counter reference.** The write screen has no tag in hand, so it measures the
   payload against NTAG213's 144 bytes and says which chip it will fit. The real
   capacity check happens against the tag itself at write time, which raises
