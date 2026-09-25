@@ -25,6 +25,7 @@ import com.tagsmith.core.settings.ThemeChoice
 import com.tagsmith.ui.LocalAppContainer
 import com.tagsmith.ui.nav.TagsmithNavHost
 import com.tagsmith.ui.theme.TagsmithTheme
+import com.tagsmith.ui.util.StatusBarIcons
 import kotlinx.coroutines.launch
 
 /**
@@ -79,6 +80,11 @@ class MainActivity : ComponentActivity() {
                 ThemeChoice.DARK -> true
                 ThemeChoice.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
             }
+
+            // The status bar follows the app's theme, not the system's: picking
+            // Dark in settings on a light-mode phone must not leave dark icons
+            // on a dark ground. Screens on their own dark grounds override this.
+            StatusBarIcons(lightIcons = dark)
 
             CompositionLocalProvider(LocalAppContainer provides container) {
                 TagsmithTheme(darkTheme = dark) {

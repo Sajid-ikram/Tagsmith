@@ -54,9 +54,13 @@ sealed class NfcFailure(
         detail = reason,
     )
 
-    data object Unreadable : NfcFailure(
-        kicker = "UNREADABLE",
-        headline = "Nothing came back from this tag",
-        detail = "It may be damaged, or it may be a type this phone's radio can't talk to.",
+    /**
+     * Batch mode saw a card it has already written. Nothing is touched, and the
+     * counter does not move — the same card must never count twice.
+     */
+    data class AlreadyInBatch(val slot: Int) : NfcFailure(
+        kicker = "ALREADY WRITTEN",
+        headline = "That's card ${slot.toString().padStart(2, '0')} again",
+        detail = "It was written earlier in this batch. Put it aside and tap the next blank card.",
     )
 }

@@ -17,6 +17,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -24,10 +27,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.tagsmith.AppContainer
+import com.tagsmith.core.data.Client
 import com.tagsmith.core.data.HistoryAction
 import com.tagsmith.core.data.HistoryEntry
 import com.tagsmith.ui.components.EmptyState
 import com.tagsmith.ui.components.ChoiceChip
+import com.tagsmith.ui.components.ClientPickerSheet
 import com.tagsmith.ui.components.Kicker
 import com.tagsmith.ui.components.ScreenTitle
 import com.tagsmith.ui.components.StrongRule
@@ -57,6 +62,7 @@ enum class HistoryRange(val label: String, val days: Int?) {
 data class HistoryFilters(
     val range: HistoryRange = HistoryRange.WEEK,
     val action: HistoryAction? = null,
+    val clientId: Long? = null,
     val failuresOnly: Boolean = false,
 )
 
@@ -66,6 +72,9 @@ class HistoryViewModel(container: AppContainer) : ViewModel() {
     private val ledger = container.ledger
     private val _filters = MutableStateFlow(HistoryFilters())
     val filters: StateFlow<HistoryFilters> = _filters
+
+    val clients: StateFlow<List<Client>> = container.clients.all()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val entries: StateFlow<List<HistoryEntry>> = ledger.allActivity()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -77,6 +86,7 @@ class HistoryViewModel(container: AppContainer) : ViewModel() {
         all.asSequence()
             .filter { it.timestamp >= cutoff }
             .filter { filters.action == null || it.action == filters.action }
+            .filter { filters.clientId == null || it.clientId == filters.clientId }
             .filter { !filters.failuresOnly || !it.success }
             .groupBy { dayLabel(it.timestamp) }
             .map { (label, rows) -> HistoryDay(label, rows) }
@@ -105,6 +115,10 @@ class HistoryViewModel(container: AppContainer) : ViewModel() {
 
     fun toggleFailures() {
         _filters.value = _filters.value.copy(failuresOnly = !_filters.value.failuresOnly)
+    }
+
+    fun setClient(clientId: Long?) {
+        _filters.value = _filters.value.copy(clientId = clientId)
     }
 
     /** The whole visible list as CSV, for handing to a client or a spreadsheet. */
@@ -136,8 +150,10 @@ fun HistoryScreen(onOpenEntry: (Long) -> Unit) {
     val days by viewModel.days.collectAsStateWithLifecycle()
     val filters by viewModel.filters.collectAsStateWithLifecycle()
     val failures by viewModel.failureCount.collectAsStateWithLifecycle()
+    val clients by viewModel.clients.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val colors = Tagsmith.colors
+    var pickingClient by remember { mutableStateOf(false) }
 
     Column(
         Modifier
@@ -170,6 +186,13 @@ fun HistoryScreen(onOpenEntry: (Long) -> Unit) {
                     label = range.label,
                     selected = filters.range == range,
                     onClick = { viewModel.setRange(range) },
+                )
+            }
+            if (clients.isNotEmpty()) {
+                ChoiceChip(
+                    label = clients.firstOrNull { it.id == filters.clientId }?.name ?: "Client",
+                    selected = filters.clientId != null,
+                    onClick = { pickingClient = true },
                 )
             }
             HistoryAction.entries.forEach { action ->
@@ -226,6 +249,19 @@ fun HistoryScreen(onOpenEntry: (Long) -> Unit) {
                 }
             }
         }
+    }
+
+    if (pickingClient) {
+        ClientPickerSheet(
+            clients = clients,
+            selectedId = filters.clientId,
+            onPick = {
+                viewModel.setClient(it)
+                pickingClient = false
+            },
+            onNewClient = null,
+            onDismiss = { pickingClient = false },
+        )
     }
 }
 

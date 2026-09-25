@@ -145,17 +145,8 @@ object TagReader {
         val raw = payload ?: ByteArray(0)
         val size = encodedSize()
         return when {
-            tnf == NdefRecord.TNF_WELL_KNOWN && type.contentEquals(NdefRecord.RTD_URI) -> {
-                val uri = decodeUri(raw)
-                NdefRecordView(
-                    kind = RecordKind.URI,
-                    typeLabel = "URI · WELL-KNOWN",
-                    display = uri,
-                    link = uri,
-                    rawHex = raw.toHexDump(),
-                    sizeBytes = size,
-                )
-            }
+            tnf == NdefRecord.TNF_WELL_KNOWN && type.contentEquals(NdefRecord.RTD_URI) ->
+                uriView(decodeUri(raw), raw, size)
 
             tnf == NdefRecord.TNF_WELL_KNOWN && type.contentEquals(NdefRecord.RTD_TEXT) -> {
                 NdefRecordView(
@@ -182,6 +173,41 @@ object TagReader {
             tnf == NdefRecord.TNF_ABSOLUTE_URI -> {
                 val uri = String(type, Charsets.UTF_8)
                 NdefRecordView(RecordKind.URI, "ABSOLUTE URI", uri, uri, raw.toHexDump(), size)
+            }
+
+            tnf == NdefRecord.TNF_MIME_MEDIA &&
+                String(type, Charsets.UTF_8).lowercase() in VCard.MIME_ALIASES -> {
+                val contact = VCard.decode(String(raw, Charsets.UTF_8))
+                NdefRecordView(
+                    kind = RecordKind.CONTACT,
+                    typeLabel = "CONTACT · VCARD",
+                    display = listOf(contact.name, contact.company).filter { it.isNotBlank() }
+                        .joinToString(" · ").ifEmpty { "Contact card" },
+                    rawHex = raw.toHexDump(),
+                    sizeBytes = size,
+                    details = listOfNotNull(
+                        contact.phone.takeIf { it.isNotBlank() }?.let { "Phone" to it },
+                        contact.email.takeIf { it.isNotBlank() }?.let { "Email" to it },
+                        contact.company.takeIf { it.isNotBlank() }?.let { "Company" to it },
+                        contact.website.takeIf { it.isNotBlank() }?.let { "Website" to it },
+                    ),
+                )
+            }
+
+            tnf == NdefRecord.TNF_MIME_MEDIA &&
+                String(type, Charsets.UTF_8).equals(WifiCredential.MIME, ignoreCase = true) -> {
+                val wifi = WifiCredential.decode(raw)
+                NdefRecordView(
+                    kind = RecordKind.WIFI,
+                    typeLabel = "WI-FI · WSC",
+                    display = wifi?.ssid ?: "Wi-Fi credential",
+                    rawHex = raw.toHexDump(),
+                    sizeBytes = size,
+                    details = if (wifi == null) emptyList() else listOfNotNull(
+                        "Security" to wifi.security.label,
+                        wifi.password.takeIf { it.isNotEmpty() }?.let { "Password" to it },
+                    ),
+                )
             }
 
             tnf == NdefRecord.TNF_MIME_MEDIA -> {
@@ -222,6 +248,44 @@ object TagReader {
                 sizeBytes = size,
             )
         }
+    }
+
+    /**
+     * A URI record, labelled by what it does rather than by its record type:
+     * `tel:` dials, `sms:` messages, `mailto:` emails, `geo:` opens a map.
+     */
+    private fun uriView(uri: String, raw: ByteArray, size: Int): NdefRecordView {
+        val scheme = uri.substringBefore(':').lowercase()
+        val body = uri.substringAfter(':')
+        val (kind, label, display) = when (scheme) {
+            "tel" -> Triple(RecordKind.PHONE, "PHONE · URI", body)
+            "sms", "smsto" -> Triple(
+                RecordKind.SMS,
+                "SMS · URI",
+                body.substringBefore('?') + (
+                    body.substringAfter("body=", "").takeIf { it.isNotEmpty() }
+                        ?.let { " · " + PayloadUris.decode(it.substringBefore('&')) } ?: ""
+                    ),
+            )
+
+            "mailto" -> Triple(RecordKind.EMAIL, "EMAIL · URI", body.substringBefore('?'))
+            "geo" -> Triple(
+                RecordKind.LOCATION,
+                "LOCATION · URI",
+                body.substringAfter("q=", "").takeIf { it.isNotEmpty() }?.let { PayloadUris.decode(it) }
+                    ?: body.substringBefore('?'),
+            )
+
+            else -> Triple(RecordKind.URI, "URI · WELL-KNOWN", uri)
+        }
+        return NdefRecordView(
+            kind = kind,
+            typeLabel = label,
+            display = display,
+            link = uri,
+            rawHex = raw.toHexDump(),
+            sizeBytes = size,
+        )
     }
 
     /** The URI record's first byte abbreviates a common prefix. */

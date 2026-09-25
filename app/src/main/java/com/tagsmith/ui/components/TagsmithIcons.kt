@@ -115,6 +115,46 @@ object TagsmithIcons {
     val Paste = stroked("paste", "M9 4h6v3H9zM7 5H5v15h14V5h-2")
     val Wifi = stroked("wifi", "M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 19.4v.4M2 9a15 15 0 0 1 20 0")
 
+    // — payload types —
+    val Contact = stroked("contact", "M15.4 8a3.4 3.4 0 1 1-6.8 0 3.4 3.4 0 1 1 6.8 0M5 20a7 7 0 0 1 14 0")
+    val Phone = stroked(
+        "phone",
+        "M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z",
+    )
+    val Sms = stroked("sms", "M4 5h16v11H9l-5 4zM8 10h8M8 13h5")
+    val Mail = stroked("mail", "M4 6h16v12H4zM4 7l8 6 8-6")
+    val Location = stroked(
+        "location",
+        "M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11zM14.4 10a2.4 2.4 0 1 1-4.8 0 2.4 2.4 0 1 1 4.8 0",
+    )
+    val App = stroked("app", "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z")
+    val Code = stroked("code", "M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14")
+
+    // — ledger and workflow —
+    val Templates = stroked("templates", "M5 4h11v13H5zM8 20h11V7")
+    val Batch = stroked("batch", "M12 3 3 8l9 5 9-5zM3 13l9 5 9-5M3 17l9 5 9-5")
+    val Pause = stroked("pause", "M8 5v14M16 5v14", width = 2.4f)
+    val Play = filled("play", "M7 4.5v15l12.5-7.5z")
+    val Share = stroked("share", "M4 13v7h16v-7M12 3v12M7 8l5-5 5 5")
+    val Globe = stroked(
+        "globe",
+        "M21 12a9 9 0 1 1-18 0 9 9 0 1 1 18 0M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18",
+    )
+    val Image = stroked(
+        "image",
+        "M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M16.5 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 1 1 3 0",
+    )
+    val Eye = stroked("eye", "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM15 12a3 3 0 1 1-6 0 3 3 0 1 1 6 0")
+    val EyeOff = stroked(
+        "eyeOff",
+        "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM15 12a3 3 0 1 1-6 0 3 3 0 1 1 6 0M3 3l18 18",
+    )
+    val Minus = stroked("minus", "M5 12h14")
+    val Locate = stroked("locate", "M12 3v4M12 17v4M3 12h4M17 12h4M16 12a4 4 0 1 1-8 0 4 4 0 1 1 8 0")
+    val StarOutline = stroked("starOutline", "m12 3 2.6 5.6 6.4.7-4.8 4.2 1.4 6.1L12 16.6 6.4 19.6l1.4-6.1L3 9.3l6.4-.7z")
+    val Duplicate = stroked("duplicate", "M9 9h11v11H9zM5 15V4h11")
+    val Review = filled("review", "m12 3 2.6 5.6 6.4.7-4.8 4.2 1.4 6.1L12 16.6 6.4 19.6l1.4-6.1L3 9.3l6.4-.7z")
+
     val More = filled(
         "more",
         "M13.4 5a1.4 1.4 0 1 1-2.8 0 1.4 1.4 0 1 1 2.8 0" +

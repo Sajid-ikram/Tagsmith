@@ -4,6 +4,14 @@
     <uses-permission android:name="android.permission.NFC" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- The App payload lists launchable apps; Android 11+ hides them without this. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <!-- NFC is not required: the app degrades to a read-only ledger without it. -->
     <uses-feature
         android:name="android.hardware.nfc"

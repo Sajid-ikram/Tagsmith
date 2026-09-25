@@ -6,114 +6,125 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tagsmith.AppContainer
-import com.tagsmith.core.nfc.ChipType
+import com.tagsmith.core.data.Client
+import com.tagsmith.core.data.Template
+import com.tagsmith.core.data.payload
 import com.tagsmith.core.nfc.NdefPayload
-import com.tagsmith.core.nfc.PayloadType
+import com.tagsmith.core.nfc.NfcPhase
 import com.tagsmith.core.nfc.TagOperation
+import com.tagsmith.core.nfc.WriteContext
 import com.tagsmith.core.nfc.byteSize
+import com.tagsmith.core.nfc.displayValue
 import com.tagsmith.core.nfc.isComplete
-import com.tagsmith.core.nfc.normalizeUrl
+import com.tagsmith.ui.payload.LARGEST_STOCKED
+import com.tagsmith.ui.payload.PayloadDraft
+import com.tagsmith.ui.payload.suggestedName
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
  * Composes a payload and hands it to the session. The byte count is computed
  * from the real NDEF encoding, not the length of the typed string.
  */
-class WriteViewModel(private val container: AppContainer, prefill: String?) : ViewModel() {
+class WriteViewModel(
+    private val container: AppContainer,
+    prefillUrl: String?,
+    templateId: Long?,
+) : ViewModel() {
 
-    var payloadType by mutableStateOf(PayloadType.URL)
-        private set
-    var url by mutableStateOf(prefill.orEmpty())
-        private set
-    var text by mutableStateOf("")
-        private set
-    var verifyAfterWrite by mutableStateOf(true)
-        private set
-    var lockAfterWrite by mutableStateOf(false)
-        private set
-
+    val draft = PayloadDraft()
     val session = container.nfc
+
+    var verifyAfterWrite by mutableStateOf(true)
+    var lockAfterWrite by mutableStateOf(false)
+    var saveAsTemplate by mutableStateOf(false)
+    var templateName by mutableStateOf("")
+    var clientId by mutableStateOf<Long?>(null)
+
+    /** Set once a successful write has saved the payload as a template. */
+    var savedTemplateName by mutableStateOf<String?>(null)
+        private set
+
+    /** The template this payload came from, while it is still unedited. */
+    private var sourceTemplate: Pair<Long, NdefPayload>? = null
+    private var armedOp: TagOperation.Write? = null
+
+    val clients: StateFlow<List<Client>> = container.clients.all()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val templates: StateFlow<List<Template>> = container.templates.all()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {
         viewModelScope.launch {
             val settings = container.settings.settings.first()
             verifyAfterWrite = settings.verifyAfterWrite
             lockAfterWrite = settings.lockAfterWrite
-            if (prefill.isNullOrBlank() && settings.defaultPayloadType.available) {
-                payloadType = settings.defaultPayloadType
+            clientId = settings.defaultClientId
+            draft.type = settings.defaultPayloadType
+
+            if (!prefillUrl.isNullOrBlank()) {
+                draft.load(NdefPayload.Url(prefillUrl))
+            }
+            templateId?.let { id -> container.templates.find(id)?.let { applyTemplate(it) } }
+        }
+
+        // Save-as-template happens once the write lands, not when it is armed:
+        // a payload that never made it onto a tag is not worth keeping yet.
+        viewModelScope.launch {
+            session.phase.collect { phase ->
+                if (phase is NfcPhase.Done && phase.result.operation === armedOp) onWritten()
             }
         }
     }
 
-    fun selectType(type: PayloadType) {
-        if (type.available) payloadType = type
-    }
-
-    fun updateUrl(value: String) {
-        url = value
-    }
-
-    fun updateText(value: String) {
-        text = value
-    }
-
-    fun updateVerify(value: Boolean) {
-        verifyAfterWrite = value
-    }
-
-    fun updateLock(value: Boolean) {
-        lockAfterWrite = value
-    }
-
-    val payload: NdefPayload
-        get() = when (payloadType) {
-            PayloadType.TEXT -> NdefPayload.Text(text)
-            else -> NdefPayload.Url(url)
-        }
-
+    val payload: NdefPayload get() = draft.payload
     val byteSize: Int get() = payload.byteSize()
+    val canWrite: Boolean get() = payload.isComplete() && byteSize in 1..LARGEST_STOCKED
+    val displayValue: String get() = payload.displayValue()
 
-    val canWrite: Boolean get() = payload.isComplete() && byteSize <= LARGEST_STOCKED
+    fun loadTemplate(template: Template) = applyTemplate(template)
 
-    /** The value the success screen echoes back. */
-    val displayValue: String
-        get() = when (payloadType) {
-            PayloadType.TEXT -> text
-            else -> normalizeUrl(url)
-        }
+    private fun applyTemplate(template: Template) {
+        val payload = template.payload() ?: return
+        draft.load(payload)
+        sourceTemplate = template.id to payload
+        template.clientId?.let { clientId = it }
+        saveAsTemplate = false
+    }
 
-    /** Which of the chips you stock this payload will actually fit on. */
-    val fitNote: String
-        get() = when {
-            byteSize == 0 -> "nothing to write yet"
-            byteSize <= ChipType.NTAG213.nominalCapacity -> "fits ${ChipType.NTAG213.label}"
-            byteSize <= ChipType.NTAG215.nominalCapacity -> "needs ${ChipType.NTAG215.label} or larger"
-            byteSize <= ChipType.NTAG216.nominalCapacity -> "needs ${ChipType.NTAG216.label}"
-            else -> "too large for any chip you stock"
-        }
-
-    val fitsSmallestChip: Boolean get() = byteSize in 1..ChipType.NTAG213.nominalCapacity
+    /** Only counts as a use of the template if the operator didn't change it. */
+    val templateIdForWrite: Long?
+        get() = sourceTemplate?.takeIf { it.second == draft.payload }?.first
 
     fun startWrite() {
-        session.arm(
-            TagOperation.Write(
-                payload = payload,
-                verify = verifyAfterWrite,
-                lockAfter = lockAfterWrite,
-            )
+        savedTemplateName = null
+        val op = TagOperation.Write(
+            payload = payload,
+            verify = verifyAfterWrite,
+            lockAfter = lockAfterWrite,
+            context = WriteContext(clientId = clientId, templateId = templateIdForWrite),
         )
+        armedOp = op
+        session.arm(op)
     }
+
+    private fun onWritten() {
+        if (!saveAsTemplate || savedTemplateName != null) return
+        val name = templateName.trim().ifEmpty { payload.suggestedName() }
+        val written = payload
+        viewModelScope.launch {
+            val id = container.templates.save(0, name, written, clientId, favourite = false)
+            sourceTemplate = id to written
+            savedTemplateName = name
+            saveAsTemplate = false
+        }
+    }
+
+    fun setUrl(url: String) = draft.load(NdefPayload.Url(url))
 
     fun cancel() = session.cancel()
-
     fun retry() = session.retry()
-
-    fun lockLastTag() = session.arm(TagOperation.Lock)
-
-    companion object {
-        /** The reference capacity the byte meter is drawn against. */
-        val SMALLEST_STOCKED = ChipType.NTAG213.nominalCapacity
-        val LARGEST_STOCKED = ChipType.NTAG216.nominalCapacity
-    }
 }

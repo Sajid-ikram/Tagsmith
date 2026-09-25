@@ -14,7 +14,10 @@ enum class ChipType(val label: String, val nominalCapacity: Int) {
     UNKNOWN("Unknown chip", 0),
 }
 
-enum class RecordKind { URI, TEXT, MIME, EXTERNAL, ANDROID_APP, SMART_POSTER, EMPTY, UNKNOWN }
+enum class RecordKind {
+    URI, TEXT, CONTACT, WIFI, PHONE, SMS, EMAIL, LOCATION,
+    MIME, EXTERNAL, ANDROID_APP, SMART_POSTER, EMPTY, UNKNOWN,
+}
 
 /** One decoded NDEF record, ready to render. */
 data class NdefRecordView(
@@ -27,6 +30,8 @@ data class NdefRecordView(
     val link: String? = null,
     val rawHex: String,
     val sizeBytes: Int,
+    /** Labelled fields for records that render as a card — a contact, a network. */
+    val details: List<Pair<String, String>> = emptyList(),
 )
 
 /** Everything a single read yields. Immutable — a snapshot of one tap. */

@@ -26,7 +26,6 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.tagsmith.core.nfc.RecordKind
 import com.tagsmith.core.nfc.TagSnapshot
 import com.tagsmith.ui.components.IconSquare
 import com.tagsmith.ui.components.Hairline
@@ -37,6 +36,7 @@ import com.tagsmith.ui.components.TagsmithIcons
 import com.tagsmith.ui.theme.Tagsmith
 import com.tagsmith.ui.theme.TagsmithTheme
 import com.tagsmith.ui.theme.TagsmithType
+import com.tagsmith.ui.payload.icon
 import com.tagsmith.ui.util.openLink
 import com.tagsmith.ui.util.rememberClipboard
 
@@ -216,13 +216,7 @@ private fun SheetBody(
 }
 
 @Composable
-internal fun com.tagsmith.core.nfc.NdefRecordView?.iconFor() = when (this?.kind) {
-    RecordKind.URI -> TagsmithIcons.Link
-    RecordKind.TEXT -> TagsmithIcons.TextRecord
-    RecordKind.ANDROID_APP -> TagsmithIcons.Tag
-    null -> TagsmithIcons.Nfc
-    else -> TagsmithIcons.Tag
-}
+internal fun com.tagsmith.core.nfc.NdefRecordView?.iconFor() = this?.kind?.icon() ?: TagsmithIcons.Nfc
 
 /** What the header chip says for a tag the app has only just met. */
 @Composable

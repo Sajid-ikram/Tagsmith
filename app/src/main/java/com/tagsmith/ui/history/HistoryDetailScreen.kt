@@ -2,6 +2,8 @@ package com.tagsmith.ui.history
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,7 +42,7 @@ import java.util.Locale
 
 /** Exactly what was written and exactly what came back on verification. */
 @Composable
-fun HistoryDetailScreen(entryId: Long, onBack: () -> Unit) {
+fun HistoryDetailScreen(entryId: Long, onBack: () -> Unit, onOpenBatch: (Long) -> Unit) {
     val container = LocalAppContainer.current
     val entry by remember(entryId) { container.ledger.activity(entryId) }
         .collectAsStateWithLifecycle(initialValue = null)
@@ -103,6 +105,18 @@ fun HistoryDetailScreen(entryId: Long, onBack: () -> Unit) {
             DataRow("UID", current.uid)
             DataRow("Chip", current.chipLabel)
             current.clientName?.let { DataRow("Client", it, mono = false) }
+            current.batchId?.let { batchId ->
+                DataRow(
+                    label = "Batch",
+                    value = "B-" + batchId.toString().padStart(3, '0') + " →",
+                    valueColor = colors.accent,
+                    modifier = Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { onOpenBatch(batchId) },
+                    ),
+                )
+            }
             DataRow("Summary", current.detail, mono = false)
             current.verified?.let {
                 DataRow(

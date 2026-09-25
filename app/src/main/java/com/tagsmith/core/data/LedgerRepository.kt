@@ -1,5 +1,6 @@
 package com.tagsmith.core.data
 
+import androidx.room.withTransaction
 import com.tagsmith.core.nfc.NfcFailure
 import com.tagsmith.core.nfc.OperationResult
 import com.tagsmith.core.nfc.TagOperation
@@ -14,17 +15,25 @@ import kotlinx.coroutines.flow.Flow
  * work on a card that left the workshop three months ago.
  */
 class LedgerRepository(
-    private val tags: TagDao,
-    private val history: HistoryDao,
+    private val db: TagsmithDatabase,
 ) {
+    private val tags = db.tags()
+    private val history = db.history()
+    private val clients = db.clients()
+    private val templates = db.templates()
+    private val batches = db.batches()
+
     fun recentActivity(limit: Int = 5): Flow<List<HistoryEntry>> = history.observeRecent(limit)
     fun allActivity(): Flow<List<HistoryEntry>> = history.observeAll()
     fun activity(id: Long): Flow<HistoryEntry?> = history.observeOne(id)
     fun allTags(): Flow<List<TagRecord>> = tags.observeAll()
     fun tag(uid: String): Flow<TagRecord?> = tags.observe(uid)
+    fun lastWrite(uid: String): Flow<HistoryEntry?> = history.observeLastWrite(uid)
     fun inventoryCount(): Flow<Int> = tags.inventoryCount()
     fun countSince(action: HistoryAction, since: Long): Flow<Int> =
         history.countSince(action, since)
+
+    fun activeClientsSince(since: Long): Flow<Int> = history.activeClientsSince(since)
 
     suspend fun known(uid: String): TagRecord? = tags.find(uid)
 
@@ -37,11 +46,55 @@ class LedgerRepository(
 
     suspend fun setStatus(uid: String, status: TagStatus) = tags.setStatus(uid, status)
 
-    /** Records a completed operation and returns the label the UI should show. */
-    suspend fun record(result: OperationResult): String {
+    suspend fun assignClient(uid: String, clientId: Long?) = tags.assignClient(uid, clientId)
+
+    /**
+     * Records a completed operation. One transaction covers the tag, the history
+     * row, the template's use count and the batch counter, so a batch can never
+     * show a card as written without the ledger agreeing.
+     */
+    suspend fun record(result: OperationResult): String = db.withTransaction {
         val snapshot = result.snapshot
-        val merged = mergeTag(snapshot, wroteTo = result.operation !is TagOperation.Read)
+        val write = result.operation as? TagOperation.Write
+        val context = write?.context
+        val existing = tags.find(snapshot.uid)
+        var merged = mergeTag(existing, snapshot, wroteTo = result.operation !is TagOperation.Read)
+        if (write != null && !snapshot.locked) {
+            // The read-back after a write can come from Android's cache of the tag
+            // as it was *before* the write, if the live read fails. The write itself
+            // succeeded, so record what was written rather than a stale "Blank".
+            merged = merged.copy(status = TagStatus.WRITTEN, contentSummary = write.payload.displayValue())
+        }
+
+        // An explicit client wins; otherwise the tag keeps the one it had.
+        val clientId = context?.clientId ?: existing?.clientId
+        val client = clientId?.let { clients.find(it) }
+        merged = merged.copy(clientId = client?.id)
+
+        // A card tapped in the instant after the batch filled up is still a real
+        // write, but it is not card N+1 of a finished batch.
+        val batch = context?.batchId?.let { batches.find(it) }?.takeIf { it.status.isOpen }
+        if (batch != null) {
+            val slot = batch.writtenCount + 1
+            merged = merged.copy(
+                batchId = batch.id,
+                nickname = batchNickname(client, batch, slot),
+            )
+            val now = System.currentTimeMillis()
+            val complete = slot >= batch.targetCount
+            batches.update(
+                batch.copy(
+                    writtenCount = slot,
+                    status = if (complete) BatchStatus.COMPLETE else batch.status,
+                    activeMillis = if (complete) batch.elapsedMillis(now) else batch.activeMillis,
+                    resumedAt = if (complete) null else batch.resumedAt,
+                    completedAt = if (complete) now else batch.completedAt,
+                )
+            )
+        }
+
         tags.upsert(merged)
+        context?.templateId?.let { templates.recordUse(it, snapshot.readAt) }
 
         val label = merged.nickname ?: snapshot.uid.shortUid()
         history.insert(
@@ -50,7 +103,9 @@ class LedgerRepository(
                 uid = snapshot.uid,
                 tagLabel = label,
                 chipLabel = snapshot.chipLabel,
-                clientName = merged.clientName,
+                clientName = client?.name,
+                clientId = client?.id,
+                batchId = batch?.id,
                 detail = detailFor(result),
                 payload = payloadFor(result),
                 verified = result.verified,
@@ -58,26 +113,34 @@ class LedgerRepository(
                 timestamp = snapshot.readAt,
             )
         )
-        return label
+        label
     }
 
-    /** Records a failure. Failures never change a tag's status. */
+    /** Records a failure. Failures never change a tag's status, and never count. */
     suspend fun recordFailure(
         operation: TagOperation,
         failure: NfcFailure,
         snapshot: TagSnapshot?,
-    ) {
+    ) = db.withTransaction {
         val uid = snapshot?.uid ?: "unknown"
-        val existing = snapshot?.let { mergeTag(it, wroteTo = false) }
-        if (existing != null) tags.upsert(existing)
+        val existing = snapshot?.let { tags.find(it.uid) }
+        val merged = snapshot?.let { mergeTag(existing, it, wroteTo = false) }
+        if (merged != null) tags.upsert(merged)
+
+        val context = (operation as? TagOperation.Write)?.context
+        val client = (context?.clientId ?: existing?.clientId)?.let { clients.find(it) }
+        val batch = context?.batchId?.let { batches.find(it) }
+        if (batch != null) batches.update(batch.copy(failedCount = batch.failedCount + 1))
 
         history.insert(
             HistoryEntry(
                 action = operation.toAction(),
                 uid = uid,
-                tagLabel = existing?.nickname ?: uid.shortUid(),
+                tagLabel = merged?.nickname ?: uid.shortUid(),
                 chipLabel = snapshot?.chipLabel ?: "Unknown chip",
-                clientName = existing?.clientName,
+                clientName = client?.name,
+                clientId = client?.id,
+                batchId = batch?.id,
                 detail = failure.headline,
                 payload = (operation as? TagOperation.Write)?.payload?.displayValue(),
                 readBack = (failure as? NfcFailure.VerificationMismatch)?.readBack,
@@ -89,12 +152,18 @@ class LedgerRepository(
         )
     }
 
+    /** `Oakwell · card 07` — the design's naming, taken from the client's first word. */
+    private fun batchNickname(client: Client?, batch: Batch, slot: Int): String {
+        val owner = client?.name?.trim()?.split(Regex("\\s+"))?.firstOrNull()?.takeIf { it.isNotEmpty() }
+            ?: batch.code
+        return "$owner · card ${slot.toString().padStart(2, '0')}"
+    }
+
     /**
      * Keeps everything the operator set by hand — nickname, client, inventory
      * flag — and refreshes only what the radio just told us.
      */
-    private suspend fun mergeTag(snapshot: TagSnapshot, wroteTo: Boolean): TagRecord {
-        val existing = tags.find(snapshot.uid)
+    private fun mergeTag(existing: TagRecord?, snapshot: TagSnapshot, wroteTo: Boolean): TagRecord {
         val status = when {
             snapshot.locked -> TagStatus.LOCKED
             existing?.status == TagStatus.DEPLOYED && !wroteTo -> TagStatus.DEPLOYED
@@ -112,7 +181,8 @@ class LedgerRepository(
             usedBytes = snapshot.usedBytes,
             status = status,
             contentSummary = snapshot.summary,
-            clientName = existing?.clientName,
+            clientId = existing?.clientId,
+            batchId = existing?.batchId,
             writable = snapshot.writable,
             firstSeenAt = existing?.firstSeenAt ?: snapshot.readAt,
             lastSeenAt = snapshot.readAt,

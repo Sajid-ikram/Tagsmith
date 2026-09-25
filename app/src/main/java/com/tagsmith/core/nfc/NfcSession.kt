@@ -13,6 +13,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * Who a write is for and where it came from. The ledger reads this to attach
+ * the tag to a client, count a template's use, and advance a batch.
+ */
+data class WriteContext(
+    val clientId: Long? = null,
+    val templateId: Long? = null,
+    val batchId: Long? = null,
+)
+
 /** What the next tap should do. */
 sealed interface TagOperation {
     data object Read : TagOperation
@@ -20,6 +30,12 @@ sealed interface TagOperation {
         val payload: NdefPayload,
         val verify: Boolean,
         val lockAfter: Boolean,
+        val context: WriteContext = WriteContext(),
+        /**
+         * Cards this batch has already written, UID to card number. A match is
+         * refused before the radio touches the tag, so one card never counts twice.
+         */
+        val alreadyWritten: Map<String, Int> = emptyMap(),
     ) : TagOperation
 
     data object Lock : TagOperation
@@ -112,7 +128,8 @@ class NfcSession(
     private val _lastSnapshot = MutableStateFlow<TagSnapshot?>(null)
     val lastSnapshot: StateFlow<TagSnapshot?> = _lastSnapshot.asStateFlow()
 
-    private var operation: TagOperation = TagOperation.Read
+    @Volatile private var operation: TagOperation = TagOperation.Read
+    @Volatile private var continuous = false
     private val inFlight = AtomicBoolean(false)
 
     fun setAvailability(value: NfcAvailability) {
@@ -122,19 +139,39 @@ class NfcSession(
         }
     }
 
-    /** Puts the radio into reader mode for [op] and moves to the waiting state. */
-    fun arm(op: TagOperation) {
+    /**
+     * Puts the radio into reader mode for [op] and moves to the waiting state.
+     *
+     * A [continuous] session never stands down between tags: the result goes out
+     * as an event and the session goes straight back to waiting. Batch mode runs
+     * this way. The radio stays in reader mode throughout, which matters — if it
+     * were switched off and on between cards, a card still resting on the phone
+     * would be discovered afresh and written twice.
+     */
+    fun arm(op: TagOperation, continuous: Boolean = false) {
         operation = op
+        this.continuous = continuous
         inFlight.set(false)
         _phase.value = NfcPhase.Waiting(op)
         _armed.value = _availability.value == NfcAvailability.READY
     }
 
+    /**
+     * Swaps the operation the next tag will get without touching the radio or
+     * the phase. A running batch uses this to hand over its latest written set.
+     */
+    fun retarget(op: TagOperation) {
+        operation = op
+        val current = _phase.value
+        if (current is NfcPhase.Waiting) _phase.value = NfcPhase.Waiting(op)
+    }
+
     /** Runs the armed operation again after a failure. */
-    fun retry() = arm(operation)
+    fun retry() = arm(operation, continuous)
 
     fun cancel() {
         inFlight.set(false)
+        continuous = false
         _armed.value = false
         _phase.value = NfcPhase.Idle
     }
@@ -148,6 +185,19 @@ class NfcSession(
     fun onTagDiscovered(tag: Tag) {
         if (!inFlight.compareAndSet(false, true)) return
         val op = operation
+        val keepListening = continuous
+
+        // A card this batch already wrote is refused before any IO — the UID is
+        // on the Tag object, so the radio never has to talk to it.
+        val uid = tag.id.toUidString()
+        val repeatSlot = (op as? TagOperation.Write)?.alreadyWritten?.get(uid)
+        if (repeatSlot != null) {
+            feedback.failure()
+            _events.tryEmit(NfcEvent.Failed(op, NfcFailure.AlreadyInBatch(repeatSlot), uid))
+            inFlight.set(false)
+            return
+        }
+
         feedback.tagDetected()
         _phase.value = NfcPhase.Detected(op)
 
@@ -160,9 +210,13 @@ class NfcSession(
                 onSuccess = { result ->
                     _lastSnapshot.value = result.snapshot
                     feedback.success()
-                    _armed.value = false
-                    _phase.value = NfcPhase.Done(result)
                     _events.tryEmit(NfcEvent.Completed(result))
+                    if (keepListening) {
+                        _phase.value = NfcPhase.Waiting(operation)
+                    } else {
+                        _armed.value = false
+                        _phase.value = NfcPhase.Done(result)
+                    }
                 },
                 onFailure = { error ->
                     val failure = (error as? TagWriter.NfcOperationException)?.failure
@@ -170,9 +224,13 @@ class NfcSession(
                     val partial = runCatching { TagReader.read(tag) }.getOrNull()
                     if (partial != null) _lastSnapshot.value = partial
                     feedback.failure()
-                    _armed.value = false
-                    _phase.value = NfcPhase.Failed(op, failure, partial)
-                    _events.tryEmit(NfcEvent.Failed(op, failure, partial?.uid))
+                    _events.tryEmit(NfcEvent.Failed(op, failure, partial?.uid ?: uid))
+                    if (keepListening) {
+                        _phase.value = NfcPhase.Waiting(operation)
+                    } else {
+                        _armed.value = false
+                        _phase.value = NfcPhase.Failed(op, failure, partial)
+                    }
                 },
             )
             inFlight.set(false)

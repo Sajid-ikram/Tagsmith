@@ -125,6 +125,7 @@ private fun LockWarning(
     onCancel: () -> Unit,
     onConfirm: () -> Unit,
 ) {
+    com.tagsmith.ui.util.StatusBarIcons(lightIcons = true)
     Column(
         Modifier
             .fillMaxSize()

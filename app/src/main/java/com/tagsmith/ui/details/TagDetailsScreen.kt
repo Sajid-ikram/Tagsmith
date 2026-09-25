@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,10 +34,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.tagsmith.core.data.Batch
+import com.tagsmith.core.data.HistoryEntry
 import com.tagsmith.core.data.TagRecord
+import com.tagsmith.core.nfc.OperationResult
+import com.tagsmith.core.nfc.TagOperation
 import com.tagsmith.core.nfc.TagSnapshot
 import com.tagsmith.ui.LocalAppContainer
 import com.tagsmith.ui.components.BarIcon
+import com.tagsmith.ui.components.ClientPickerSheet
 import com.tagsmith.ui.components.ByteMeter
 import com.tagsmith.ui.components.DataRow
 import com.tagsmith.ui.components.Hairline
@@ -52,8 +58,13 @@ import com.tagsmith.ui.scan.iconFor
 import com.tagsmith.ui.scan.statusLabel
 import com.tagsmith.ui.theme.Tagsmith
 import com.tagsmith.ui.theme.TagsmithType
+import com.tagsmith.ui.util.currentLocale
 import com.tagsmith.ui.util.openLink
 import com.tagsmith.ui.util.rememberClipboard
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * The expanded sheet: identity, contents, provenance, then the actions.
@@ -66,10 +77,20 @@ fun TagDetailsScreen(
     onOverwrite: () -> Unit,
     onErase: () -> Unit,
     onLock: () -> Unit,
+    onOpenBatch: (Long) -> Unit,
+    onNewClient: () -> Unit,
 ) {
     val container = LocalAppContainer.current
+    val scope = rememberCoroutineScope()
     val known by remember(snapshot.uid) { container.ledger.tag(snapshot.uid) }
         .collectAsStateWithLifecycle(initialValue = null)
+    val lastWrite by remember(snapshot.uid) { container.ledger.lastWrite(snapshot.uid) }
+        .collectAsStateWithLifecycle(initialValue = null)
+    val clients by remember { container.clients.all() }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val batch by remember(known?.batchId) {
+        known?.batchId?.let { container.batches.batch(it) } ?: kotlinx.coroutines.flow.flowOf(null)
+    }.collectAsStateWithLifecycle(initialValue = null)
+    var pickingClient by remember { mutableStateOf(false) }
 
     val colors = Tagsmith.colors
     val context = LocalContext.current
@@ -242,8 +263,17 @@ fun TagDetailsScreen(
                                             onClick = { openLink(context, link) },
                                         ),
                                     )
+                                } else if (record.details.isNotEmpty()) {
+                                    // A contact or a network reads as a card, not a string.
+                                    Text(record.display, style = TagsmithType.RowTitle, color = colors.ink)
                                 } else {
                                     Text(record.display, style = TagsmithType.Data, color = colors.ink)
+                                }
+                                record.details.forEach { (label, value) ->
+                                    Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                                        Text(label, style = TagsmithType.BodyTiny, color = colors.inkFaint, modifier = Modifier.width(76.dp))
+                                        Text(value, style = TagsmithType.Data, color = colors.ink)
+                                    }
                                 }
                                 if (showRawHex && record.rawHex.isNotBlank()) {
                                     Spacer(Modifier.height(8.dp))
@@ -262,7 +292,15 @@ fun TagDetailsScreen(
             }
 
             // — provenance, once the app has met this tag before —
-            known?.let { record -> ProvenanceBlock(record) }
+            known?.let { record ->
+                ProvenanceBlock(
+                    record = record,
+                    clientName = clients.firstOrNull { it.id == record.clientId }?.name,
+                    batch = batch,
+                    lastWrite = lastWrite,
+                    onOpenBatch = onOpenBatch,
+                )
+            }
 
             Spacer(Modifier.height(24.dp))
         }
@@ -281,6 +319,8 @@ fun TagDetailsScreen(
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ActionChip("Overwrite", enabled = snapshot.writable, onClick = onOverwrite)
+                    // Still live on a locked tag: who it belongs to is not written on it.
+                    ActionChip("Assign client", enabled = true, onClick = { pickingClient = true })
                     ActionChip("Erase", enabled = snapshot.writable && snapshot.formatted, onClick = onErase)
                     ActionChip(
                         label = "Lock",
@@ -307,10 +347,39 @@ fun TagDetailsScreen(
             }
         }
     }
+
+    if (pickingClient) {
+        ClientPickerSheet(
+            clients = clients,
+            selectedId = known?.clientId,
+            onPick = { id ->
+                pickingClient = false
+                scope.launch {
+                    // A tag read for the first time has no ledger row yet; record the read first.
+                    if (container.ledger.known(snapshot.uid) == null) {
+                        container.ledger.record(OperationResult(TagOperation.Read, snapshot, null))
+                    }
+                    container.ledger.assignClient(snapshot.uid, id)
+                }
+            },
+            onNewClient = {
+                pickingClient = false
+                onNewClient()
+            },
+            onDismiss = { pickingClient = false },
+        )
+    }
 }
 
+/** Which client, which batch, when, and whether it read back true. */
 @Composable
-private fun ProvenanceBlock(record: TagRecord) {
+private fun ProvenanceBlock(
+    record: TagRecord,
+    clientName: String?,
+    batch: Batch?,
+    lastWrite: HistoryEntry?,
+    onOpenBatch: (Long) -> Unit,
+) {
     val colors = Tagsmith.colors
     Column(Modifier.padding(horizontal = 20.dp).padding(top = 16.dp)) {
         StrongRule()
@@ -319,15 +388,45 @@ private fun ProvenanceBlock(record: TagRecord) {
             Kicker("Provenance")
             Spacer(Modifier.height(8.dp))
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                ProvenanceRow("Client", record.clientName ?: "Unassigned")
+                ProvenanceRow("Client", clientName ?: "Unassigned")
+                if (batch != null) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { onOpenBatch(batch.id) },
+                            ),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("Batch", style = TagsmithType.BodyTiny, color = colors.inkFaint)
+                        Text(
+                            "${batch.code} · ${batch.writtenCount} cards",
+                            style = TagsmithType.DataSmall,
+                            color = colors.accent,
+                        )
+                    }
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Status", style = TagsmithType.BodyTiny, color = colors.inkFaint)
                     val visual = statusVisual(record.status)
                     StatusChip(visual.label, visual.fill, visual.content, small = true)
                 }
+                record.lastWrittenAt?.let {
+                    ProvenanceRow("Written", SimpleDateFormat("d MMM yyyy, HH:mm", currentLocale()).format(Date(it)))
+                }
+                lastWrite?.verified?.let { verified ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Verified", style = TagsmithType.BodyTiny, color = colors.inkFaint)
+                        Text(
+                            if (verified) "Yes" else "No",
+                            style = TagsmithType.RowTitleSmall,
+                            color = if (verified) colors.success else colors.danger,
+                        )
+                    }
+                }
                 ProvenanceRow("First seen", com.tagsmith.ui.home.shortTime(record.firstSeenAt))
-                record.lastWrittenAt?.let { ProvenanceRow("Last written", com.tagsmith.ui.home.shortTime(it)) }
-                ProvenanceRow("In inventory", if (record.inInventory) "Yes" else "No")
             }
             Spacer(Modifier.height(12.dp))
         }

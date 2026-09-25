@@ -35,6 +35,8 @@ fun EmptyState(
     icon: ImageVector? = null,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
+    /** Outline instead of ember — for when the screen already has a primary. */
+    quietAction: Boolean = false,
 ) {
     Column(
         modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -56,7 +58,11 @@ fun EmptyState(
         Text(body, style = TagsmithType.Body, color = Tagsmith.colors.inkMuted)
         if (actionLabel != null && onAction != null) {
             Spacer(Modifier.height(22.dp))
-            PrimaryAction(label = actionLabel, onClick = onAction, trailingIcon = TagsmithIcons.ArrowRight)
+            if (quietAction) {
+                OutlineAction(label = actionLabel, onClick = onAction, trailingIcon = TagsmithIcons.ArrowRight)
+            } else {
+                PrimaryAction(label = actionLabel, onClick = onAction, trailingIcon = TagsmithIcons.ArrowRight)
+            }
         }
     }
 }

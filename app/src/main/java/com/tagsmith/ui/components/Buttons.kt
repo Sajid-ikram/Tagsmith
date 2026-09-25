@@ -105,6 +105,8 @@ fun OutlineAction(
         modifier = modifier
             .fillMaxWidth()
             .height(height)
+            // Before the border, so a disabled button fades whole — not just its label.
+            .alpha(if (enabled) 1f else 0.45f)
             .background(if (pressed) pressedFill else fill)
             .border(BorderStroke(2.dp, borderColor), RectangleShape)
             .clickable(
@@ -114,8 +116,7 @@ fun OutlineAction(
                 role = Role.Button,
                 onClick = onClick,
             )
-            .padding(horizontal = 18.dp)
-            .alpha(if (enabled) 1f else 0.45f),
+            .padding(horizontal = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {

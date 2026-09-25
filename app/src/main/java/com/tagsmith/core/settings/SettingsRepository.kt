@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.tagsmith.core.nfc.PayloadType
@@ -22,6 +23,8 @@ data class AppSettings(
     val verifyAfterWrite: Boolean = true,
     val lockAfterWrite: Boolean = false,
     val onboardingComplete: Boolean = false,
+    /** Pre-selected on the write and batch screens; null for none. */
+    val defaultClientId: Long? = null,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore("tagsmith_settings")
@@ -37,6 +40,7 @@ class SettingsRepository(private val context: Context) {
         val verify = booleanPreferencesKey("verify_after_write")
         val lock = booleanPreferencesKey("lock_after_write")
         val onboarded = booleanPreferencesKey("onboarding_complete")
+        val defaultClient = longPreferencesKey("default_client")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { prefs ->
@@ -52,6 +56,7 @@ class SettingsRepository(private val context: Context) {
             verifyAfterWrite = prefs[Keys.verify] ?: true,
             lockAfterWrite = prefs[Keys.lock] ?: false,
             onboardingComplete = prefs[Keys.onboarded] ?: false,
+            defaultClientId = prefs[Keys.defaultClient]?.takeIf { it > 0 },
         )
     }
 
@@ -63,6 +68,7 @@ class SettingsRepository(private val context: Context) {
     suspend fun setVerifyAfterWrite(value: Boolean) = put(Keys.verify, value)
     suspend fun setLockAfterWrite(value: Boolean) = put(Keys.lock, value)
     suspend fun setOnboardingComplete(value: Boolean) = put(Keys.onboarded, value)
+    suspend fun setDefaultClient(id: Long?) = put(Keys.defaultClient, id ?: 0L)
 
     private suspend fun <T> put(key: Preferences.Key<T>, value: T) {
         context.dataStore.edit { it[key] = value }

@@ -30,16 +30,22 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.tagsmith.AppContainer
+import com.tagsmith.core.data.Client
 import com.tagsmith.core.nfc.PayloadType
 import com.tagsmith.core.settings.AppSettings
 import com.tagsmith.core.settings.SettingsRepository
 import com.tagsmith.core.settings.ThemeChoice
+import com.tagsmith.ui.components.ClientPickerSheet
 import com.tagsmith.ui.components.Kicker
+import com.tagsmith.ui.components.SheetAction
+import com.tagsmith.ui.components.TagsmithSheet
+import com.tagsmith.ui.components.SegmentedControl
 import com.tagsmith.ui.components.SettingRow
 import com.tagsmith.ui.components.SquareSwitch
 import com.tagsmith.ui.components.StrongRule
 import com.tagsmith.ui.components.TagsmithTopBar
 import com.tagsmith.ui.containerViewModel
+import com.tagsmith.ui.payload.icon
 import com.tagsmith.ui.theme.Tagsmith
 import com.tagsmith.ui.theme.TagsmithType
 import kotlinx.coroutines.flow.SharingStarted
@@ -47,7 +53,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-class SettingsViewModel(container: AppContainer) : ViewModel() {
+class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     private val repository: SettingsRepository = container.settings
     private val ledger = container.ledger
 
@@ -64,15 +70,22 @@ class SettingsViewModel(container: AppContainer) : ViewModel() {
 
     fun setVerify(value: Boolean) = viewModelScope.launch { repository.setVerifyAfterWrite(value) }
     fun setLock(value: Boolean) = viewModelScope.launch { repository.setLockAfterWrite(value) }
+    fun setDefaultClient(id: Long?) = viewModelScope.launch { repository.setDefaultClient(id) }
     fun clearHistory() = viewModelScope.launch { ledger.clearHistory() }
+
+    val clients: StateFlow<List<Client>> = container.clients.all()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 }
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, versionName: String) {
+fun SettingsScreen(onBack: () -> Unit, versionName: String, onNewClient: () -> Unit) {
     val viewModel: SettingsViewModel = containerViewModel { SettingsViewModel(it) }
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val clients by viewModel.clients.collectAsStateWithLifecycle()
     val colors = Tagsmith.colors
     var confirmClear by remember { mutableStateOf(false) }
+    var pickingClient by remember { mutableStateOf(false) }
+    var pickingType by remember { mutableStateOf(false) }
 
     Column(
         Modifier
@@ -89,7 +102,7 @@ fun SettingsScreen(onBack: () -> Unit, versionName: String) {
                 .padding(horizontal = 16.dp),
         ) {
             SettingsGroup("Appearance") {
-                Segmented(
+                SegmentedControl(
                     options = ThemeChoice.entries.map { it.label },
                     selectedIndex = ThemeChoice.entries.indexOf(settings.theme),
                     onSelect = { viewModel.setTheme(ThemeChoice.entries[it]) },
@@ -117,16 +130,15 @@ fun SettingsScreen(onBack: () -> Unit, versionName: String) {
             }
 
             SettingsGroup("Defaults") {
-                SettingRow("Payload type") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PayloadType.entries.filter { it.available }.forEach { type ->
-                            com.tagsmith.ui.components.ChoiceChip(
-                                label = type.label,
-                                selected = settings.defaultPayloadType == type,
-                                onClick = { viewModel.setDefaultPayload(type) },
-                            )
-                        }
-                    }
+                SettingRow("Payload type", onClick = { pickingType = true }) {
+                    Text(settings.defaultPayloadType.label, style = TagsmithType.RowTitleSmall, color = colors.inkFaint)
+                }
+                SettingRow("Default client", onClick = { pickingClient = true }) {
+                    Text(
+                        clients.firstOrNull { it.id == settings.defaultClientId }?.name ?: "None",
+                        style = TagsmithType.RowTitleSmall,
+                        color = colors.inkFaint,
+                    )
                 }
                 SettingRow("Verify after write") {
                     SquareSwitch(settings.verifyAfterWrite, viewModel::setVerify)
@@ -185,6 +197,37 @@ fun SettingsScreen(onBack: () -> Unit, versionName: String) {
             Spacer(Modifier.height(48.dp))
         }
     }
+
+    if (pickingClient) {
+        ClientPickerSheet(
+            clients = clients,
+            selectedId = settings.defaultClientId,
+            onPick = {
+                viewModel.setDefaultClient(it)
+                pickingClient = false
+            },
+            onNewClient = {
+                pickingClient = false
+                onNewClient()
+            },
+            onDismiss = { pickingClient = false },
+        )
+    }
+    if (pickingType) {
+        TagsmithSheet(onDismiss = { pickingType = false }, title = "Default payload") {
+            PayloadType.entries.forEach { type ->
+                SheetAction(
+                    label = type.label,
+                    icon = type.icon(),
+                    onClick = {
+                        viewModel.setDefaultPayload(type)
+                        pickingType = false
+                    },
+                    detail = if (type == settings.defaultPayloadType) "Current default" else null,
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -195,43 +238,6 @@ private fun SettingsGroup(label: String, content: @Composable () -> Unit) {
         Kicker(label)
         Spacer(Modifier.height(8.dp))
         content()
-    }
-}
-
-/** The three-cell segmented control from the board — one 2px box, hard divisions. */
-@Composable
-private fun Segmented(
-    options: List<String>,
-    selectedIndex: Int,
-    onSelect: (Int) -> Unit,
-) {
-    val colors = Tagsmith.colors
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .border(2.dp, colors.rule, RectangleShape),
-    ) {
-        options.forEachIndexed { index, label ->
-            val selected = index == selectedIndex
-            Box(
-                Modifier
-                    .weight(1f)
-                    .background(if (selected) colors.ink else androidx.compose.ui.graphics.Color.Transparent)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = { onSelect(index) },
-                    )
-                    .padding(vertical = 11.dp),
-                contentAlignment = androidx.compose.ui.Alignment.Center,
-            ) {
-                Text(
-                    text = label,
-                    style = if (selected) TagsmithType.ChipSelected else TagsmithType.Chip,
-                    color = if (selected) colors.ground else colors.ink,
-                )
-            }
-        }
     }
 }
 

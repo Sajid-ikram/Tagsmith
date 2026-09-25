@@ -143,7 +143,10 @@ fun WriteSuccessScreen(
     onWriteAnother: () -> Unit,
     onLock: () -> Unit,
     onDone: () -> Unit,
+    /** A line under the value — "Saved as template “Oakwell review”". */
+    note: String? = null,
 ) {
+    com.tagsmith.ui.util.StatusBarIcons(lightIcons = true)
     Column(
         Modifier
             .fillMaxSize()
@@ -188,6 +191,10 @@ fun WriteSuccessScreen(
                 Text("ON THE TAG", style = TagsmithType.Kicker, color = com.tagsmith.ui.theme.DarkSuccess)
                 Spacer(Modifier.height(4.dp))
                 Text(value, style = TagsmithType.Data, color = SuccessOn)
+            }
+            if (note != null) {
+                Spacer(Modifier.height(12.dp))
+                Text(note, style = TagsmithType.BodyTiny, color = SuccessOnMuted, textAlign = TextAlign.Center)
             }
         }
 

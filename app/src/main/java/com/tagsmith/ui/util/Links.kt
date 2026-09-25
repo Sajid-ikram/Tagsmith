@@ -89,3 +89,11 @@ interface TagsmithClipboard {
     fun copy(text: String)
     fun paste(onResult: (String) -> Unit)
 }
+
+/**
+ * The locale to format dates in, read so that a language change recomposes.
+ * `Locale.getDefault()` inside a composable would keep the old one.
+ */
+@Composable
+fun currentLocale(): java.util.Locale =
+    androidx.compose.ui.platform.LocalConfiguration.current.locales[0]

@@ -202,6 +202,8 @@ fun TagsmithTheme(
  */
 @Composable
 fun OnTapGround(content: @Composable () -> Unit) {
+    // The tap ground is dark whatever the theme, so the status bar is too.
+    com.tagsmith.ui.util.StatusBarIcons(lightIcons = true)
     CompositionLocalProvider(LocalTagsmithPalette provides TapPalette) {
         MaterialTheme(
             colorScheme = schemeFor(TapPalette),

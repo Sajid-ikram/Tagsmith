@@ -2,10 +2,14 @@ package com.tagsmith
 
 import android.app.Application
 import android.content.Context
+import com.tagsmith.core.data.BatchRepository
+import com.tagsmith.core.data.ClientRepository
 import com.tagsmith.core.data.LedgerRepository
 import com.tagsmith.core.data.TagsmithDatabase
+import com.tagsmith.core.data.TemplateRepository
 import com.tagsmith.core.feedback.SystemFeedback
 import com.tagsmith.core.nfc.NfcEvent
+import com.tagsmith.core.nfc.NfcFailure
 import com.tagsmith.core.nfc.NfcSession
 import com.tagsmith.core.settings.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
@@ -15,7 +19,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 
 /**
- * Hand-wired dependencies. One operator, one phone, five collaborators —
+ * Hand-wired dependencies. One operator, one phone, a handful of collaborators —
  * a DI framework would cost more than it saves here.
  */
 class AppContainer(context: Context) {
@@ -26,7 +30,10 @@ class AppContainer(context: Context) {
 
     val settings = SettingsRepository(context)
     val feedback = SystemFeedback(context)
-    val ledger = LedgerRepository(database.tags(), database.history())
+    val ledger = LedgerRepository(database)
+    val clients = ClientRepository(context, database)
+    val templates = TemplateRepository(database)
+    val batches = BatchRepository(database)
     val nfc = NfcSession(applicationScope, feedback)
 
     init {
@@ -35,11 +42,14 @@ class AppContainer(context: Context) {
             .onEach { event ->
                 when (event) {
                     is NfcEvent.Completed -> ledger.record(event.result)
-                    is NfcEvent.Failed -> ledger.recordFailure(
-                        event.operation,
-                        event.failure,
-                        nfc.lastSnapshot.value?.takeIf { it.uid == event.uid },
-                    )
+                    // A repeat card in a batch never reached the radio: nothing to log.
+                    is NfcEvent.Failed -> if (event.failure !is NfcFailure.AlreadyInBatch) {
+                        ledger.recordFailure(
+                            event.operation,
+                            event.failure,
+                            nfc.lastSnapshot.value?.takeIf { it.uid == event.uid },
+                        )
+                    }
                 }
             }
             .launchIn(applicationScope)
@@ -52,6 +62,17 @@ class AppContainer(context: Context) {
                 feedback.soundsEnabled = current.sounds
             }
         }
+
+        // A batch cannot really be running before any screen has opened it.
+        applicationScope.launch { batches.settleAfterRestart() }
+    }
+
+    /**
+     * Pauses a batch from a screen that is being torn down. The screen's own
+     * scope dies with it, so the write has to outlive it here.
+     */
+    fun pauseBatchInBackground(batchId: Long) {
+        applicationScope.launch { batches.pause(batchId) }
     }
 }
 
